@@ -40,7 +40,7 @@ Basically everything. This is a toy. Never use it for anything you care about.
 
 Here are some specific gotchas:
 
-* Tokens are generated using a FNV-1a hash<sup>1<sup> which is a
+* Tokens are generated using a FNV-1a hash<sup>1</sup> which is a
   non-cryptographic hash.  Attackers can trivially DoS a node by generating
   keys which hash to the same token.
 * The "backend" is currently an in-memory map (lol @ "mmap") so there's 0
