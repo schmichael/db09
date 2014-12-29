@@ -56,4 +56,5 @@ Here are some specific gotchas:
 
 1. After years of research, decades of of benchmarking, and centuries of
    microoptimizing assembly for every known CPU, I chose FNV-1a because it was
-   in the Go standard library and sounded more professional than "CRC32".
+   in the Go standard library and sounded more professional than "CRC32". I
+   also chop it in half which probably doubles the security.
