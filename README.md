@@ -6,7 +6,7 @@ The dumbest possible distributed key/value store.
 * Timestamp based versioning (LWW - last write wins)
 * Token ring (2<sup>16</sup> tokens)
 * Configurable replication level (RL)
-* Max useful nodes = (2<sup>16<sup> ⨉ RL) (so 196,608 for RL=3)
+* Max useful nodes = (2<sup>16</sup> ⨉ RL) (so 196,608 for RL=3)
 
 ## wat
 
