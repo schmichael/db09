@@ -7,9 +7,9 @@ import "bytes"
 // (It's obviously a struct and not a tuple. Go doesn't have tuples. Tuple is
 // just a cool databasey word to use.)
 type Value struct {
-	Timestamp uint64
-	Deleted   bool
-	V         []byte
+	Timestamp uint64 `json:"ts"`
+	Deleted   bool   `json:"deleted,omitempty"`
+	V         []byte `json:"value,omitempty"`
 }
 
 func (v *Value) Equals(o *Value) bool {

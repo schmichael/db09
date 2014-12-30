@@ -1,10 +1,13 @@
 package db09
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"path"
+	"strconv"
+	"time"
 )
 
 type dbHandler struct {
@@ -19,23 +22,29 @@ func (h *dbHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rl := 2
+	if r, err := strconv.Atoi(r.URL.Query().Get("rl")); err == nil {
+		rl = r
+	}
+
 	var err error
-	var value string
+	var v *Value
 
 	switch r.Method {
 	case "GET":
-		err, value = h.get(key)
+		v, err = h.db.Get([]byte(key), rl)
 	case "PUT":
-		v := r.Form.Get("value")
-		if v == "" {
-			w.WriteHeader(400)
-			w.Write([]byte("missing 'value' form value"))
-			return
+		incoming := &Value{}
+		if err = json.NewDecoder(r.Body).Decode(incoming); err != nil {
+			break
 		}
-		err = h.set(key, v)
-	case "DELETE":
-		w.WriteHeader(500)
-		w.Write([]byte("todo"))
+		if incoming.Timestamp == 0 {
+			incoming.Timestamp = uint64(time.Now().UnixNano())
+		}
+		err = h.db.Set([]byte(key), incoming, rl)
+	default:
+		w.WriteHeader(405)
+		fmt.Fprintf(w, "%s unsupported", r.Method)
 		return
 	}
 
@@ -51,17 +60,13 @@ func (h *dbHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(200)
-	w.Write([]byte(value))
-}
-
-func (h *dbHandler) get(key string) (error, string) {
-	panic("TODO")
-	return nil, ""
-}
-
-func (h *dbHandler) set(key string, value string) error {
-	panic("TODO")
-	return nil
+	if v == nil {
+		w.Write([]byte("ok"))
+		return
+	}
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("Error writing response: %v", err)
+	}
 }
 
 // Serve db on bind. Blocks until error.
