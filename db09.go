@@ -21,24 +21,27 @@ var (
 )
 
 type State struct {
-	Version uint64
-	Ring    [Tokens]string
-	TTL     int
+	Version uint64         `json:"version"`
+	Ring    [Tokens]string `json:"ring"`
 }
 
 type DB interface {
 	Addr() string
 	Get(key []byte, replicas int) (*Value, error)
 	Set(key []byte, v *Value, replicas int) error
+
+	// Gossip on DBs receives gossip. Gossip on Client sends gossip. I dunno man.
+	Gossip(*State) error
 }
 
 type MemDB struct {
 	addr string
 	rl   int // replication level
 
-	ringL sync.Mutex
-	ring  [Tokens]DB // 256 * 256 * 16 = 1MB
-	peers map[string]*Client
+	ringL   sync.Mutex
+	ring    [Tokens]DB // 256 * 256 * 16 = 1MB
+	version uint64
+	peers   map[string]*Client
 
 	dbL sync.Mutex
 	db  map[string]*Value
@@ -52,34 +55,27 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	}
 
 	// Gossip to get initial state
-	var ver uint64
 	for _, s := range seeds {
 		//TODO do concurrently (have fun managing d.peers)
 		state := s.RecvGossip()
-		if state.Version > ver {
-			for token, addr := range state.Ring {
-				if addr == selfAddr {
-					d.ring[token] = d
-				} else {
-					if c, ok := d.peers[addr]; ok {
-						d.ring[token] = c
-					} else {
-						c = &Client{addr: addr}
-						d.ring[token] = c
-						d.peers[addr] = c
-					}
-				}
-			}
+		if d.version > state.Version {
+			continue
 		}
+		d.updateRing(state)
 	}
-	if ver == 0 {
+
+	if d.version == 0 {
+		d.version++
 		// No ring, claim it all
 		for x := range d.ring {
 			d.ring[x] = d
 		}
-		ver++
 		return d
 	}
+
+	//FIXME This needs a distributed lock or vector clocks, but I'm way too lazy
+	//      for that. Just only spin up one node at a time, ok?
+	d.version++
 
 	// Claim part of the ring
 	candidates := []uint16{}
@@ -120,14 +116,17 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	}
 
 	// Build and gossip state
-	state := &State{TTL: 1}
+	state := &State{Version: d.version}
 	for t, c := range d.ring {
 		state.Ring[t] = c.Addr()
 	}
 	for _, c := range d.peers {
-		if err := c.SendGossip(state); err != nil {
-			log.Printf("Error sending state to %s: %v", c, err)
-		}
+		// goroutines! 😎
+		go func() {
+			if err := c.Gossip(state); err != nil {
+				log.Printf("Error gossiping to %s: %v", c, err)
+			}
+		}()
 	}
 
 	return d
@@ -326,6 +325,38 @@ func (d *MemDB) localSet(key []byte, v *Value) error {
 	}
 	d.db[k] = v
 	return nil
+}
+
+func (d *MemDB) Gossip(s *State) error {
+	d.ringL.Lock()
+	defer d.ringL.Unlock()
+	if s.Version < d.version {
+		return StaleWrite
+	}
+	if s.Version == d.version {
+		// We could error check here, but that sounds awful TODO I guess?
+		return nil
+	}
+
+	d.updateRing(s)
+	return nil
+}
+
+func (d *MemDB) updateRing(state *State) {
+	d.version = state.Version
+	for token, addr := range state.Ring {
+		if addr == d.addr {
+			d.ring[token] = d
+		} else {
+			if c, ok := d.peers[addr]; ok {
+				d.ring[token] = c
+			} else {
+				c = &Client{addr: addr}
+				d.ring[token] = c
+				d.peers[addr] = c
+			}
+		}
+	}
 }
 
 func (d *MemDB) Addr() string {

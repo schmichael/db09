@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-type dbHandler struct {
+type keyHandler struct {
 	db DB
 }
 
-func (h *dbHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dir, key := path.Split(r.URL.Path)
 	if dir != "keys/" || key == "" {
 		w.WriteHeader(404)
@@ -69,9 +69,27 @@ func (h *dbHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type gossipHandler struct {
+	db DB
+}
+
+func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		panic("FIXME: spew state")
+	case "POST":
+		panic("FIXME: recv state")
+	default:
+		w.WriteHeader(405)
+		fmt.Fprintf(w, "%s unsupported", r.Method)
+		return
+	}
+}
+
 // Serve db on bind. Blocks until error.
 func Serve(bind string, db DB) {
-	http.Handle("/keys/", &dbHandler{db})
+	http.Handle("/keys/", &keyHandler{db})
+	http.Handle("/gossip/", &keyHandler{db})
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("pong"))
 	})
