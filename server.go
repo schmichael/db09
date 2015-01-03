@@ -16,7 +16,7 @@ type keyHandler struct {
 
 func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dir, key := path.Split(r.URL.Path)
-	if dir != "keys/" || key == "" {
+	if dir != "/keys/" || key == "" {
 		w.WriteHeader(404)
 		fmt.Fprintf(w, "dir(%s) key(%s) not found", dir, key)
 		return
