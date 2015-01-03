@@ -23,6 +23,10 @@ type Client struct {
 	addr string
 }
 
+func NewClient(addr string) *Client {
+	return &Client{addr: addr}
+}
+
 func (c *Client) keypath(key []byte, r int) string {
 	u := url.URL{
 		Scheme:   "http",
