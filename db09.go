@@ -85,17 +85,17 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 			// Already claimed this one, it's not a candidate
 			continue
 		}
-		peers := make(map[string]struct{}, rl)
+		replicants := make(map[string]struct{}, rl)
 		for i := token; i < rl; i++ {
-			if d.ring[i] != nil {
-				peers[d.ring[i].Addr()] = struct{}{}
-			}
+			replicants[d.ring[i].Addr()] = struct{}{}
 		}
 		// Fewer peers than replication level for token, maybe grab it
-		if len(peers) < rl {
+		if len(replicants) < rl {
 			candidates = append(candidates, uint16(token))
 		}
 	}
+
+	log.Printf("Found %d candidates to create ring version %d", len(candidates), d.version)
 
 	// If there's <=minClaim*2 candidates, grab them all. Otherwise take half
 	if len(candidates) > (minClaim * 2) {
@@ -356,6 +356,7 @@ func (d *MemDB) Gossip() *State {
 }
 
 func (d *MemDB) updateRing(state *State) {
+	log.Printf("Updating state from %d to %d", d.version, state.Version)
 	d.version = state.Version
 	for token, addr := range state.Ring {
 		if addr == d.addr {
