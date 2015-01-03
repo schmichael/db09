@@ -49,9 +49,10 @@ type MemDB struct {
 
 func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	d := &MemDB{
-		addr: selfAddr,
-		rl:   rl,
-		db:   make(map[string]*Value),
+		addr:  selfAddr,
+		rl:    rl,
+		db:    make(map[string]*Value),
+		peers: make(map[string]*Client),
 	}
 
 	// Gossip to get initial state
