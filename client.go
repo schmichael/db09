@@ -22,7 +22,6 @@ type Client struct {
 	addr string
 }
 
-func (c *Client) keypath(base string, key []byte, r int) string {
 func (c *Client) keypath(key []byte, r int) string {
 	u := url.URL{
 		Scheme:   "http",
@@ -33,7 +32,7 @@ func (c *Client) keypath(key []byte, r int) string {
 	return u.String()
 }
 
-func (c *Client) Gossip(s *State) error {
+func (c *Client) GossipUpdate(s *State) error {
 	buf, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -61,7 +60,7 @@ func (c *Client) Gossip(s *State) error {
 	}
 }
 
-func (c *Client) RecvGossip() *State {
+func (c *Client) Gossip() *State {
 	panic("not implemented")
 }
 

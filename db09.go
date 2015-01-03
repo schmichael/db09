@@ -30,8 +30,8 @@ type DB interface {
 	Get(key []byte, replicas int) (*Value, error)
 	Set(key []byte, v *Value, replicas int) error
 
-	// Gossip on DBs receives gossip. Gossip on Client sends gossip. I dunno man.
-	Gossip(*State) error
+	GossipUpdate(*State) error
+	Gossip() *State
 }
 
 type MemDB struct {
@@ -57,7 +57,7 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	// Gossip to get initial state
 	for _, s := range seeds {
 		//TODO do concurrently (have fun managing d.peers)
-		state := s.RecvGossip()
+		state := s.Gossip()
 		if d.version > state.Version {
 			continue
 		}
@@ -123,7 +123,7 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	for _, c := range d.peers {
 		// goroutines! 😎
 		go func() {
-			if err := c.Gossip(state); err != nil {
+			if err := c.GossipUpdate(state); err != nil {
 				log.Printf("Error gossiping to %s: %v", c, err)
 			}
 		}()
@@ -327,7 +327,7 @@ func (d *MemDB) localSet(key []byte, v *Value) error {
 	return nil
 }
 
-func (d *MemDB) Gossip(s *State) error {
+func (d *MemDB) GossipUpdate(s *State) error {
 	d.ringL.Lock()
 	defer d.ringL.Unlock()
 	if s.Version < d.version {
@@ -340,6 +340,16 @@ func (d *MemDB) Gossip(s *State) error {
 
 	d.updateRing(s)
 	return nil
+}
+
+func (d *MemDB) Gossip() *State {
+	d.ringL.Lock()
+	defer d.ringL.Unlock()
+	s := State{Version: d.version}
+	for i, c := range d.ring {
+		s.Ring[i] = c.Addr()
+	}
+	return &s
 }
 
 func (d *MemDB) updateRing(state *State) {

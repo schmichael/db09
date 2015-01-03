@@ -76,13 +76,22 @@ type gossipHandler struct {
 func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		panic("FIXME: spew state")
+		if err := json.NewEncoder(w).Encode(h.db.Gossip()); err != nil {
+			w.WriteHeader(500)
+			log.Printf("Error writing Gossip... hopefully the client just disappeared? %v", err)
+		}
 	case "POST":
-		panic("FIXME: recv state")
+		s := &State{}
+		if err := json.NewDecoder(r.Body).Decode(s); err != nil {
+			w.WriteHeader(500)
+			log.Printf("Error reading Gossip: %v", err)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte("ok"))
 	default:
 		w.WriteHeader(405)
 		fmt.Fprintf(w, "%s unsupported", r.Method)
-		return
 	}
 }
 
