@@ -98,7 +98,7 @@ func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Serve db on bind. Blocks until error.
 func Serve(bind string, db DB) {
 	http.Handle("/keys/", &keyHandler{db})
-	http.Handle("/gossip/", &keyHandler{db})
+	http.Handle("/gossip", &keyHandler{db})
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("pong"))
 	})

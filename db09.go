@@ -58,7 +58,7 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	for _, s := range seeds {
 		//TODO do concurrently (have fun managing d.peers)
 		state := s.Gossip()
-		if d.version > state.Version {
+		if state == nil || d.version > state.Version {
 			continue
 		}
 		d.updateRing(state)

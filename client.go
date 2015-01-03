@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -61,7 +62,23 @@ func (c *Client) GossipUpdate(s *State) error {
 }
 
 func (c *Client) Gossip() *State {
-	panic("not implemented")
+	resp, err := http.Get("http://" + c.addr + "/gossip")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case 200:
+		s := &State{}
+		if err := json.NewDecoder(resp.Body).Decode(s); err != nil {
+			log.Printf("Error decoding gossip response: %v", err)
+			return nil
+		}
+		return s
+	default:
+		log.Printf("Unexpected Gossip() response: %d", resp.StatusCode)
+		return nil
+	}
 }
 
 func (c *Client) Get(key []byte, replicas int) (*Value, error) {
