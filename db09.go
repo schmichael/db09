@@ -123,11 +123,13 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	}
 	for _, c := range d.peers {
 		// goroutines! 😎
-		go func() {
+		go func(c *Client) {
 			if err := c.GossipUpdate(state); err != nil {
 				log.Printf("Error gossiping to %s: %v", c, err)
+			} else {
+				log.Printf("Gossip version %d to %s", d.version, c.Addr())
 			}
-		}()
+		}(c)
 	}
 
 	return d
