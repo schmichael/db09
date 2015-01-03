@@ -87,6 +87,7 @@ func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error reading Gossip: %v", err)
 			return
 		}
+		h.db.GossipUpdate(s)
 		w.WriteHeader(200)
 		w.Write([]byte("ok"))
 	default:
