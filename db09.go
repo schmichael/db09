@@ -59,13 +59,14 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	for _, s := range seeds {
 		//TODO do concurrently (have fun managing d.peers)
 		state := s.Gossip()
-		if state == nil || d.version > state.Version {
+		if state == nil || state.Version <= d.version {
 			continue
 		}
 		d.updateRing(state)
 	}
 
 	if d.version == 0 {
+		log.Println("I'm the first! Claiming the whole ring.")
 		d.version++
 		// No ring, claim it all
 		for x := range d.ring {
@@ -80,18 +81,18 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 
 	// Claim part of the ring
 	candidates := []uint16{}
-	for token := range d.ring {
-		if d.ring[token].Addr() == d.addr {
-			// Already claimed this one, it's not a candidate
-			continue
-		}
+candidateSearch:
+	for token := 0; token < Tokens; token++ {
 		replicants := make(map[string]struct{}, rl)
-		for i := token; i < rl; i++ {
-			replicants[d.ring[i].Addr()] = struct{}{}
-		}
-		// Fewer peers than replication level for token, maybe grab it
-		if len(replicants) < rl {
-			candidates = append(candidates, uint16(token))
+		for i := uint16(token); i < uint16(token)+uint16(rl); i++ {
+			a := d.ring[i].Addr()
+			if _, ok := replicants[a]; ok {
+				// This replicant owns two tokens too close together, take one
+				candidates = append(candidates, uint16(token))
+				token = int(i)
+				continue candidateSearch
+			}
+			replicants[a] = struct{}{}
 		}
 	}
 
@@ -121,9 +122,12 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	for t, c := range d.ring {
 		state.Ring[t] = c.Addr()
 	}
+	wg := sync.WaitGroup{}
 	for _, c := range d.peers {
 		// goroutines! 😎
+		wg.Add(1)
 		go func(c *Client) {
+			defer wg.Done()
 			if err := c.GossipUpdate(state); err != nil {
 				log.Printf("Error gossiping to %s: %v", c, err)
 			} else {
@@ -131,6 +135,10 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 			}
 		}(c)
 	}
+	go func() {
+		wg.Wait()
+		log.Printf("Done with initial gossip.")
+	}()
 
 	return d
 }
@@ -190,6 +198,9 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 	tsCounts := map[uint64]int{}
 	candidates := make(map[uint64]*Value, len(nodes))
 	for _, result := range results {
+		if result == nil {
+			continue
+		}
 		tsCounts[result.Timestamp]++
 
 		if v, ok := candidates[result.Timestamp]; ok {
@@ -256,7 +267,7 @@ func (d *MemDB) localGet(key []byte) (*Value, error) {
 		if !has {
 			//TODO This would be a great time to Gossip as obviously the cluster state
 			//     is inconsistent.
-			log.Println("Local GET for key %q token %d even though this node isn't a replica!", key, token)
+			log.Printf("Local GET for key %q token %d even though this node isn't a replica!", key, token)
 		}
 	}
 
@@ -296,6 +307,8 @@ func (d *MemDB) Set(key []byte, v *Value, replicas int) error {
 			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
 		}
 	}()
+
+	log.Printf("[TRACE] SET %q ts %d on peers %v", string(key), v.Timestamp, nodes)
 
 	// Get results
 	//TODO concurrently set peers (probably want to add a out argument)
