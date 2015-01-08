@@ -148,7 +148,7 @@ func (d *MemDB) has(token int) bool {
 	d.ringL.Lock()
 	defer d.ringL.Unlock()
 	for i := 0; i < d.rl; i++ {
-		if d.ring[token-i].Addr() == d.Addr() {
+		if d.ring[uint16(token+i)].Addr() == d.Addr() {
 			return true
 		}
 	}
