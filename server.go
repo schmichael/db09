@@ -19,6 +19,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if dir != "/keys/" || key == "" {
 		w.WriteHeader(404)
 		fmt.Fprintf(w, "dir(%s) key(%s) not found", dir, key)
+		log.Printf("Returning 404: %s %s", r.Method, r.URL)
 		return
 	}
 
@@ -33,7 +34,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		v, err = h.db.Get([]byte(key), rl)
-	case "PUT":
+	case "PUT", "POST": //FIXME POST only supported out of laziness
 		incoming := &Value{}
 		if err = json.NewDecoder(r.Body).Decode(incoming); err != nil {
 			break
@@ -42,6 +43,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			incoming.Timestamp = uint64(time.Now().UnixNano())
 		}
 		err = h.db.Set([]byte(key), incoming, rl)
+		log.Printf("%s %s %q (err? %v)", r.Method, r.URL, incoming.V, err)
 	default:
 		w.WriteHeader(405)
 		fmt.Fprintf(w, "%s unsupported", r.Method)
