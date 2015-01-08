@@ -2,8 +2,11 @@ package db09
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"math/rand"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -41,7 +44,7 @@ type MemDB struct {
 	ringL   sync.Mutex
 	ring    [Tokens]DB // 256 * 256 * 16 = 1MB
 	version uint64
-	peers   map[string]*Client
+	peers   map[string]DB
 
 	dbL sync.Mutex
 	db  map[string]*Value
@@ -52,7 +55,7 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 		addr:  selfAddr,
 		rl:    rl,
 		db:    make(map[string]*Value),
-		peers: make(map[string]*Client),
+		peers: make(map[string]DB),
 	}
 
 	// Gossip to get initial state
@@ -122,11 +125,21 @@ candidateSearch:
 	for t, c := range d.ring {
 		state.Ring[t] = c.Addr()
 	}
+
+	// debugging
+	counts := make(map[string]int, len(d.peers))
+	for _, c := range d.ring {
+		counts[c.Addr()]++
+	}
+	for server, count := range counts {
+		log.Printf("Ring verison %d: %s -> %d", d.version, server, count)
+	}
+
 	wg := sync.WaitGroup{}
 	for _, c := range d.peers {
 		// goroutines! 😎
 		wg.Add(1)
-		go func(c *Client) {
+		go func(c DB) {
 			defer wg.Done()
 			if err := c.GossipUpdate(state); err != nil {
 				log.Printf("Error gossiping to %s: %v", c, err)
@@ -170,7 +183,7 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 
 	// Get replicas
 	token := tokenize(key)
-	nodes := make(map[string]DB, d.rl)
+	nodes := make(nodeMap, d.rl)
 	func() {
 		d.ringL.Lock()
 		defer d.ringL.Unlock()
@@ -178,19 +191,21 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
 		}
 	}()
+	log.Printf("Sending GET %q (%d) to %s", key, token, nodes)
 
 	// Get results
 	//TODO concurrently get from peers (probably want to add a timeout argument)
-	results := make([]*Result, len(nodes))
+	results := make([]Result, len(nodes))
 	i := 0
 	for addr, node := range nodes {
-		if v, err := node.Get(key, 0); err != nil {
+		v, err := node.Get(key, 0)
+		if err != nil {
 			if err != NotFound {
 				log.Printf("Error GETing %q from %s: %v", key, node, err)
 			}
-		} else {
-			results[i] = &Result{v, addr}
 		}
+		results[i].Addr = addr
+		results[i].Value = v
 		i++
 	}
 
@@ -198,7 +213,7 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 	tsCounts := map[uint64]int{}
 	candidates := make(map[uint64]*Value, len(nodes))
 	for _, result := range results {
-		if result == nil {
+		if result.Value == nil {
 			continue
 		}
 		tsCounts[result.Timestamp]++
@@ -225,7 +240,7 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 
 	// No winners, ouch
 	if winner == 0 {
-		log.Printf("[TRACE] Out of %d results for %q, no single version occurred at least %d times.",
+		log.Printf("Out of %d results for %q, no single version occurred at least %d times.",
 			len(results), key, replicas)
 		return nil, NotFound
 	}
@@ -234,7 +249,7 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 
 	// Read repair!
 	for _, result := range results {
-		if result.Timestamp < winner {
+		if result.Value == nil || result.Timestamp < winner {
 			d.ringL.Lock()
 			c := d.peers[result.Addr]
 			d.ringL.Unlock()
@@ -308,7 +323,7 @@ func (d *MemDB) Set(key []byte, v *Value, replicas int) error {
 		}
 	}()
 
-	log.Printf("[TRACE] SET %q ts %d on peers %v", string(key), v.Timestamp, nodes)
+	log.Printf("SET %q ts %d on peers %v", string(key), v.Timestamp, nodes)
 
 	// Get results
 	//TODO concurrently set peers (probably want to add a out argument)
@@ -368,24 +383,54 @@ func (d *MemDB) Gossip() *State {
 	return &s
 }
 
+// MUST HAVE ringL SRY
 func (d *MemDB) updateRing(state *State) {
 	log.Printf("Updating state from %d to %d", d.version, state.Version)
 	d.version = state.Version
+	peers := map[string]DB{}
 	for token, addr := range state.Ring {
+		if token > 1078 && token < 1090 {
+			fmt.Println(addr, token)
+		}
 		if addr == d.addr {
+			// Hey, that's me!
 			d.ring[token] = d
 		} else {
+			// First try to find client in new peer map
+			if c, ok := peers[addr]; ok {
+				d.ring[token] = c
+				continue
+			}
+
+			// Well that failed, try to find it in the old peer map
 			if c, ok := d.peers[addr]; ok {
 				d.ring[token] = c
-			} else {
-				c = &Client{addr: addr}
-				d.ring[token] = c
-				d.peers[addr] = c
+				peers[addr] = c
+				continue
 			}
+
+			// Ok, it's a new client
+			c := &Client{addr: addr}
+			d.ring[token] = c
+			d.peers[addr] = c
 		}
 	}
+
+	// Overwrite old peers with new
+	d.peers = peers
 }
 
 func (d *MemDB) Addr() string {
 	return d.addr
+}
+
+type nodeMap map[string]DB
+
+func (n nodeMap) String() string {
+	s := make([]string, 0, len(n))
+	for key := range n {
+		s = append(s, key)
+	}
+	sort.Strings(s)
+	return strings.Join(s, ", ")
 }
