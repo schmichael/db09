@@ -33,7 +33,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case "GET":
-		v, err = h.db.Get([]byte(key), rl)
+		v, err = h.db.Get(key, rl)
 	case "PUT", "POST": //FIXME POST only supported out of laziness
 		incoming := &Value{}
 		if err = json.NewDecoder(r.Body).Decode(incoming); err != nil {
@@ -42,7 +42,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if incoming.Timestamp == 0 {
 			incoming.Timestamp = uint64(time.Now().UnixNano())
 		}
-		err = h.db.Set([]byte(key), incoming, rl)
+		err = h.db.Set(key, incoming, rl)
 		log.Printf("%s %s %q (err? %v)", r.Method, r.URL, incoming.V, err)
 	default:
 		w.WriteHeader(405)
@@ -51,6 +51,7 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		log.Printf("%s %s Error: %v", r.Method, r.URL, err)
 		if err == NotFound {
 			w.WriteHeader(404)
 			w.Write([]byte("not found"))

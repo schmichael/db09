@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.Ldate | log.Lmicroseconds | log.Lshortfile)
 	host := "localhost"
 	addr := ""
 	port := 2009

@@ -30,8 +30,8 @@ type State struct {
 
 type DB interface {
 	Addr() string
-	Get(key []byte, replicas int) (*Value, error)
-	Set(key []byte, v *Value, replicas int) error
+	Get(key string, replicas int) (*Value, error)
+	Set(key string, v *Value, replicas int) error
 
 	GossipUpdate(*State) error
 	Gossip() *State
@@ -168,7 +168,7 @@ func (d *MemDB) has(token int) bool {
 	return false
 }
 
-func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
+func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	if replicas > d.rl {
 		return nil, TooManyReplicas
 	}
@@ -183,11 +183,11 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 
 	// Get replicas
 	token := tokenize(key)
-	nodes := make(nodeMap, d.rl)
+	nodes := make(nodeMap, replicas)
 	func() {
 		d.ringL.Lock()
 		defer d.ringL.Unlock()
-		for i := 0; i < d.rl; i++ {
+		for i := 0; i < replicas; i++ {
 			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
 		}
 	}()
@@ -264,7 +264,9 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 				//TODO Just think of how much fun getting StaleWrites here will be!
 				//     Surely there's something intelligent to do?
 				log.Printf("Failed read repairing %q to %s: %v", key, result.Addr, err)
+				continue
 			}
+			log.Printf("Read repair for %s=%q (ts=%v) to %v", key, value, winner, c)
 		}
 	}
 
@@ -273,7 +275,7 @@ func (d *MemDB) Get(key []byte, replicas int) (*Value, error) {
 	return value, nil
 }
 
-func (d *MemDB) localGet(key []byte) (*Value, error) {
+func (d *MemDB) localGet(key string) (*Value, error) {
 	{
 		// Sanity check
 		token := tokenize(key)
@@ -298,8 +300,8 @@ func (d *MemDB) localGet(key []byte) (*Value, error) {
 	return v, nil
 }
 
-// Set key to value. replicas > 0 means all replicas for now. ¯\_(ツ)_/¯
-func (d *MemDB) Set(key []byte, v *Value, replicas int) error {
+// Set key to value.
+func (d *MemDB) Set(key string, v *Value, replicas int) error {
 	if replicas > d.rl {
 		return TooManyReplicas
 	}
@@ -314,16 +316,16 @@ func (d *MemDB) Set(key []byte, v *Value, replicas int) error {
 
 	// Get replicas
 	token := tokenize(key)
-	nodes := make(map[string]DB, d.rl)
+	nodes := make(map[string]DB, replicas)
 	func() {
 		d.ringL.Lock()
 		defer d.ringL.Unlock()
-		for i := 0; i < d.rl; i++ {
+		for i := 0; i < replicas; i++ {
 			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
 		}
 	}()
 
-	log.Printf("SET %q ts %d on peers %v", string(key), v.Timestamp, nodes)
+	log.Printf("SET %s=%q ts %d on peers %v", key, v.V, v.Timestamp, nodes)
 
 	// Get results
 	//TODO concurrently set peers (probably want to add a out argument)
@@ -338,7 +340,7 @@ func (d *MemDB) Set(key []byte, v *Value, replicas int) error {
 	return nil
 }
 
-func (d *MemDB) localSet(key []byte, v *Value) error {
+func (d *MemDB) localSet(key string, v *Value) error {
 	if !d.has(tokenize(key)) {
 		log.Printf("Aborting SET for %q because local node is not a replica.", key)
 		//XXX I don't think it's worth reporting this as an error because cluster
@@ -385,10 +387,11 @@ func (d *MemDB) Gossip() *State {
 
 // MUST HAVE ringL SRY
 func (d *MemDB) updateRing(state *State) {
-	log.Printf("Updating state from %d to %d", d.version, state.Version)
+	log.Printf("Updating ring state from %d to %d", d.version, state.Version)
 	d.version = state.Version
 	peers := map[string]DB{}
 	for token, addr := range state.Ring {
+		//HACK for debugging
 		if token > 1078 && token < 1090 {
 			fmt.Println(addr, token)
 		}
@@ -422,6 +425,10 @@ func (d *MemDB) updateRing(state *State) {
 
 func (d *MemDB) Addr() string {
 	return d.addr
+}
+
+func (d *MemDB) String() string {
+	return "self"
 }
 
 type nodeMap map[string]DB

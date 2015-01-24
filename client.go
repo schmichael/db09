@@ -27,11 +27,11 @@ func NewClient(addr string) *Client {
 	return &Client{addr: addr}
 }
 
-func (c *Client) keypath(key []byte, r int) string {
+func (c *Client) keypath(key string, r int) string {
 	u := url.URL{
 		Scheme:   "http",
 		Host:     c.addr,
-		Path:     "keys/" + url.QueryEscape(string(key)),
+		Path:     "keys/" + url.QueryEscape(key),
 		RawQuery: "rl=" + strconv.Itoa(r),
 	}
 	return u.String()
@@ -85,7 +85,7 @@ func (c *Client) Gossip() *State {
 	}
 }
 
-func (c *Client) Get(key []byte, replicas int) (*Value, error) {
+func (c *Client) Get(key string, replicas int) (*Value, error) {
 	resp, err := http.Get(c.keypath(key, replicas))
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (c *Client) Get(key []byte, replicas int) (*Value, error) {
 	}
 }
 
-func (c *Client) Set(key []byte, v *Value, replicas int) error {
+func (c *Client) Set(key string, v *Value, replicas int) error {
 	buf, err := json.Marshal(v)
 	if err != nil {
 		return err
