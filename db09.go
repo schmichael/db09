@@ -309,28 +309,26 @@ func (d *MemDB) Set(key string, v *Value, replicas int) error {
 
 	// Get replicas
 	token := tokenize(key)
-	nodes := make(map[string]DB, replicas)
-	func() {
-		d.ringL.Lock()
-		defer d.ringL.Unlock()
-		for i := 0; i < replicas; i++ {
-			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
-		}
-	}()
+	nodes := d.replicas(token)
 
 	log.Printf("SET %s=%q ts %d on peers %v", key, v.V, v.Timestamp, nodes)
 
 	// Get results
 	//TODO concurrently set peers (probably want to add a out argument)
+	sets := 0
+	var lastErr error
 	for _, node := range nodes {
 		if err := node.Set(key, v, 0); err != nil {
-			if err == StaleWrite {
-				log.Printf("Aborting SET because %s reported it as stale.", node.Addr())
-			}
-			return err
+			log.Printf("SET of %s to %v failed: %v", key, node, err)
+			lastErr = err
+			continue
+		}
+		sets++
+		if sets == replicas {
+			break
 		}
 	}
-	return nil
+	return lastErr
 }
 
 func (d *MemDB) localSet(key string, v *Value) error {
