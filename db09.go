@@ -168,6 +168,17 @@ func (d *MemDB) has(token int) bool {
 	return false
 }
 
+// replicas returns the nodes that are repicas for a given token
+func (d *MemDB) replicas(token int) []DB {
+	d.ringL.Lock()
+	defer d.ringL.Unlock()
+	r := make([]DB, d.rl)
+	for i := 0; i < d.rl; i++ {
+		r[i] = d.ring[uint16(token+i)]
+	}
+	return r
+}
+
 func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	if replicas > d.rl {
 		return nil, TooManyReplicas
@@ -183,39 +194,32 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 
 	// Get replicas
 	token := tokenize(key)
-	nodes := make(nodeMap, replicas)
-	func() {
-		d.ringL.Lock()
-		defer d.ringL.Unlock()
-		for i := 0; i < replicas; i++ {
-			nodes[d.ring[token+i].Addr()] = d.ring[token+i]
-		}
-	}()
-	log.Printf("Sending GET %q (%d) to %s", key, token, nodes)
+	nodes := d.replicas(token)
+	log.Printf("Sending GET %q (%d) to %v", key, token, nodes)
 
 	// Get results
 	//TODO concurrently get from peers (probably want to add a timeout argument)
-	results := make([]Result, len(nodes))
-	i := 0
-	for addr, node := range nodes {
+	results := []Result{}
+	for _, node := range nodes {
 		v, err := node.Get(key, 0)
 		if err != nil {
 			if err != NotFound {
 				log.Printf("Error GETing %q from %s: %v", key, node, err)
 			}
+			continue
 		}
-		results[i].Addr = addr
-		results[i].Value = v
-		i++
+		results = append(results, Result{Addr: node.Addr(), Value: v})
+
+		// Gather number of results equal to replicas param
+		if len(results) == replicas {
+			break
+		}
 	}
 
 	// Get timestamp counts
 	tsCounts := map[uint64]int{}
-	candidates := make(map[uint64]*Value, len(nodes))
+	candidates := make(map[uint64]*Value, len(results))
 	for _, result := range results {
-		if result.Value == nil {
-			continue
-		}
 		tsCounts[result.Timestamp]++
 
 		if v, ok := candidates[result.Timestamp]; ok {
@@ -223,10 +227,10 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 				// Well this should never happen
 				log.Printf("Values with the same Key/Version mismatch: %#v != %#v", v, result)
 				tsCounts[result.Timestamp] -= 2 // negate both mismatched results
+				continue
 			}
-		} else {
-			candidates[result.Timestamp] = result.Value
 		}
+		candidates[result.Timestamp] = result.Value
 	}
 
 	// Get highest timestamp with count >= replicas
@@ -248,26 +252,15 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	value := candidates[winner]
 
 	// Read repair!
-	for _, result := range results {
-		if result.Value == nil || result.Timestamp < winner {
-			d.ringL.Lock()
-			c := d.peers[result.Addr]
-			d.ringL.Unlock()
-			if c == nil {
-				log.Printf("Unknown peer %s in results for %q. Adding to peers.", result.Addr, key)
-				c = &Client{addr: result.Addr}
-				d.ringL.Lock()
-				d.peers[result.Addr] = c
-				d.ringL.Unlock()
-			}
-			if err := c.Set(key, value, 0); err != nil {
-				//TODO Just think of how much fun getting StaleWrites here will be!
-				//     Surely there's something intelligent to do?
-				log.Printf("Failed read repairing %q to %s: %v", key, result.Addr, err)
-				continue
-			}
-			log.Printf("Read repair for %s=%q (ts=%v) to %v", key, value, winner, c)
+	// FIXME Do concurrently
+	for _, node := range nodes {
+		if err := node.Set(key, value, 0); err != nil {
+			//TODO Just think of how much fun getting StaleWrites here will be!
+			//     Surely there's something intelligent to do?
+			log.Printf("Failed read repairing %q to %s: %v", key, node, err)
+			continue
 		}
+		log.Printf("Read repair for %s=%q (ts=%v) to %v", key, value.V, winner, node)
 	}
 
 	// Hey! We have a winner! Something worked or at least a happy confluence
