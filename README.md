@@ -27,9 +27,9 @@ got to spend endless hours tuning the JVM, debugging vector clocks, cursing
 compactions, discovering what "durability" meant, and becoming heros in their
 chosen kingdoms.
 
-Now the startups those heros worked for got acquired, or failed, or are just
-flailing. The databases are almost following through on the promises they were
-making back then. All the action is in Java Script or containers or service
+Now the startups those heros worked for are acquired, failed, or just flailing.
+The databases are almost following through on the promises they were making
+back then. All the action is in Java Script or containers or service
 orchestration.
 
 **Enter db09.**

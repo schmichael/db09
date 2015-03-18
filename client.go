@@ -85,10 +85,10 @@ func (c *Client) Gossip() *State {
 	}
 }
 
-func (c *Client) Get(key string, replicas int) (*Value, error) {
+func (c *Client) Get(key string, replicas int) (Value, error) {
 	resp, err := http.Get(c.keypath(key, replicas))
 	if err != nil {
-		return nil, err
+		return EmptyValue, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -96,27 +96,27 @@ func (c *Client) Get(key string, replicas int) (*Value, error) {
 		//TODO ReadAll is basically always a bad idea, but w/e yolo
 		buf, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return nil, err
+			return EmptyValue, err
 		}
 		if err, ok := errMap[string(buf)]; ok {
-			return nil, err
+			return EmptyValue, err
 		}
-		return nil, fmt.Errorf("unknown error: %q", buf)
+		return EmptyValue, fmt.Errorf("unknown error: %q", buf)
 	case 404:
-		return nil, NotFound
+		return EmptyValue, NotFound
 	case 200:
-		v := &Value{}
-		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
-			return nil, err
+		v := Value{}
+		if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+			return EmptyValue, err
 		}
 		return v, nil
 	default:
-		return nil, fmt.Errorf("unknown status: %d", resp.StatusCode)
+		return EmptyValue, fmt.Errorf("unknown status: %d", resp.StatusCode)
 	}
 }
 
-func (c *Client) Set(key string, v *Value, replicas int) error {
-	buf, err := json.Marshal(v)
+func (c *Client) Set(key string, v Value, replicas int) error {
+	buf, err := json.Marshal(&v)
 	if err != nil {
 		return err
 	}
@@ -141,6 +141,30 @@ func (c *Client) Set(key string, v *Value, replicas int) error {
 	default:
 		return fmt.Errorf("unknown status: %d", resp.StatusCode)
 	}
+}
+
+func (c *Client) Version() (version uint64) {
+	resp, err := http.Get("http://" + c.addr + "/gossip/version")
+	if err != nil {
+		log.Printf("Error getting version from client %s: %v", c.addr, err)
+		return
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case 200:
+		buf, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Error reading version response from client %s: %v", c.addr, err)
+			return
+		}
+		version, err = strconv.ParseUint(string(buf), 10, 64)
+		if err != nil {
+			log.Printf("Error parsing version from client %s: %v", c.addr, err)
+		}
+	default:
+		log.Printf("Unexpected status code from client %s when retrieving version: %d", c.addr, resp.StatusCode)
+	}
+	return
 }
 
 func (c *Client) Addr() string {

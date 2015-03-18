@@ -2,12 +2,12 @@ package db09
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"math/rand"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 const Tokens = 1 << 16
@@ -20,6 +20,8 @@ var (
 	WrongNode       = errors.New("request sent to node which isn't a replica for token")
 
 	// Minimum tokens to claim
+	//FIXME this should really be dynamically calculated based off RL and number
+	//      of peers
 	minClaim = 100
 )
 
@@ -30,11 +32,12 @@ type State struct {
 
 type DB interface {
 	Addr() string
-	Get(key string, replicas int) (*Value, error)
-	Set(key string, v *Value, replicas int) error
+	Get(key string, replicas int) (Value, error)
+	Set(key string, v Value, replicas int) error
 
 	GossipUpdate(*State) error
 	Gossip() *State
+	Version() uint64
 }
 
 type MemDB struct {
@@ -47,15 +50,19 @@ type MemDB struct {
 	peers   map[string]DB
 
 	dbL sync.Mutex
-	db  map[string]*Value
+	db  [Tokens]map[string]Value // ~5MB empty
 }
 
 func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 	d := &MemDB{
 		addr:  selfAddr,
 		rl:    rl,
-		db:    make(map[string]*Value),
 		peers: make(map[string]DB),
+	}
+
+	// Initialize in memory db
+	for i := range d.db {
+		d.db[i] = make(map[string]Value)
 	}
 
 	// Gossip to get initial state
@@ -101,10 +108,6 @@ candidateSearch:
 
 	log.Printf("Found %d candidates to create ring version %d", len(candidates), d.version)
 
-	// If there's <=minClaim*2 candidates, grab them all. Otherwise take half
-	if len(candidates) > (minClaim * 2) {
-		candidates = candidates[:len(candidates)>>1]
-	}
 	for _, c := range candidates {
 		d.ring[c] = d
 	}
@@ -179,12 +182,12 @@ func (d *MemDB) replicas(token int) []DB {
 	return r
 }
 
-func (d *MemDB) Get(key string, replicas int) (*Value, error) {
+func (d *MemDB) Get(key string, replicas int) (Value, error) {
 	if replicas > d.rl {
-		return nil, TooManyReplicas
+		return EmptyValue, TooManyReplicas
 	}
 	if len(key) == 0 {
-		return nil, EmptyKey
+		return EmptyValue, EmptyKey
 	}
 
 	// Only forward Get if needed
@@ -218,7 +221,7 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 
 	// Get timestamp counts
 	tsCounts := map[uint64]int{}
-	candidates := make(map[uint64]*Value, len(results))
+	candidates := make(map[uint64]Value, len(results))
 	for _, result := range results {
 		tsCounts[result.Timestamp]++
 
@@ -246,7 +249,7 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	if winner == 0 {
 		log.Printf("Out of %d results for %q, no single version occurred at least %d times.",
 			len(results), key, replicas)
-		return nil, NotFound
+		return EmptyValue, NotFound
 	}
 
 	value := candidates[winner]
@@ -268,33 +271,31 @@ func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	return value, nil
 }
 
-func (d *MemDB) localGet(key string) (*Value, error) {
-	{
-		// Sanity check
-		token := tokenize(key)
-		has := d.has(token)
+func (d *MemDB) localGet(key string) (Value, error) {
+	token := tokenize(key)
 
-		if !has {
-			//TODO This would be a great time to Gossip as obviously the cluster state
-			//     is inconsistent.
-			log.Printf("Local GET for key %q token %d even though this node isn't a replica!", key, token)
-		}
+	// Sanity check
+	has := d.has(token)
+	if !has {
+		//TODO This would be a great time to Gossip as obviously the cluster state
+		//     is inconsistent.
+		log.Printf("Local GET for key %q token %d even though this node isn't a replica!", key, token)
 	}
 
 	// Always try to retrieve a key locally even if this node isn't a replica. It
 	// may have been in the past and a stale version is better than no version?
 	d.dbL.Lock()
-	v := d.db[string(key)]
+	v, ok := d.db[token][string(key)]
 	d.dbL.Unlock()
 
-	if v == nil {
-		return nil, NotFound
+	if !ok {
+		return EmptyValue, NotFound
 	}
 	return v, nil
 }
 
 // Set key to value.
-func (d *MemDB) Set(key string, v *Value, replicas int) error {
+func (d *MemDB) Set(key string, v Value, replicas int) error {
 	if replicas > d.rl {
 		return TooManyReplicas
 	}
@@ -331,11 +332,12 @@ func (d *MemDB) Set(key string, v *Value, replicas int) error {
 	return lastErr
 }
 
-func (d *MemDB) localSet(key string, v *Value) error {
-	if !d.has(tokenize(key)) {
+func (d *MemDB) localSet(key string, v Value) error {
+	token := tokenize(key)
+	if !d.has(token) {
 		log.Printf("Aborting SET for %q because local node is not a replica.", key)
 		//XXX I don't think it's worth reporting this as an error because cluster
-		//    state changes asynchronously... but maybe clients should
+		//    state changes asynchronously... but maybe clients should be made aware
 		return WrongNode
 	}
 
@@ -344,10 +346,10 @@ func (d *MemDB) localSet(key string, v *Value) error {
 
 	d.dbL.Lock()
 	defer d.dbL.Unlock()
-	if existing, ok := d.db[k]; ok && existing.Timestamp > v.Timestamp {
+	if existing, ok := d.db[token][k]; ok && existing.Timestamp > v.Timestamp {
 		return StaleWrite
 	}
-	d.db[k] = v
+	d.db[token][k] = v
 	return nil
 }
 
@@ -379,39 +381,63 @@ func (d *MemDB) Gossip() *State {
 // MUST HAVE ringL SRY
 func (d *MemDB) updateRing(state *State) {
 	log.Printf("Updating ring state from %d to %d", d.version, state.Version)
-	d.version = state.Version
 	peers := map[string]DB{}
+	streamTokens := map[string][]int{}
 	for token, addr := range state.Ring {
-		//HACK for debugging
-		if token > 1078 && token < 1090 {
-			fmt.Println(addr, token)
-		}
 		if addr == d.addr {
 			// Hey, that's me!
 			d.ring[token] = d
-		} else {
-			// First try to find client in new peer map
-			if c, ok := peers[addr]; ok {
-				d.ring[token] = c
-				continue
-			}
+			continue
+		}
 
-			// Well that failed, try to find it in the old peer map
-			if c, ok := d.peers[addr]; ok {
-				d.ring[token] = c
-				peers[addr] = c
-				continue
-			}
+		wasMine := false
+		if d.ring[token] != nil {
+			wasMine = d.ring[token].Addr() == d.addr
+		}
 
+		var c DB
+		var ok bool
+
+		// First try to find client in new peer map
+		if c, ok = peers[addr]; ok {
+			d.ring[token] = c
+		}
+
+		// Well that failed, try to find it in the old peer map
+		if c, ok = d.peers[addr]; ok {
+			d.ring[token] = c
+			peers[addr] = c
+		}
+
+		if c == nil {
 			// Ok, it's a new client
-			c := &Client{addr: addr}
+			c = &Client{addr: addr}
 			d.ring[token] = c
 			d.peers[addr] = c
+			log.Printf("Discovered new peer via incoming gossip: %s (token %d)", c, token)
 		}
+
+		// Stream data for tokens that used to belong to this node to the new owner
+		if wasMine {
+			streamTokens[c.Addr()] = append(streamTokens[c.Addr()], token)
+		}
+	}
+
+	// Asynchronously stream the list of tokens we used to own to their new
+	// owners
+	for addr, tokens := range streamTokens {
+		go d.stream(peers[addr], tokens, state.Version)
 	}
 
 	// Overwrite old peers with new
 	d.peers = peers
+	d.version = state.Version
+}
+
+func (d *MemDB) Version() uint64 {
+	d.ringL.Lock()
+	defer d.ringL.Unlock()
+	return d.version
 }
 
 func (d *MemDB) Addr() string {
@@ -420,6 +446,40 @@ func (d *MemDB) Addr() string {
 
 func (d *MemDB) String() string {
 	return "self"
+}
+
+func (d *MemDB) stream(p DB, tokens []int, ver uint64) {
+	for i := 0; ; i++ {
+		peerver := p.Version()
+		if peerver == ver {
+			break
+		}
+		if peerver < ver {
+			if i > 20 {
+				log.Printf("Giving up streaming %d tokens to client %s", len(tokens), p)
+			}
+			log.Printf("Waiting for client %s to upgrade ring version from %d to %d before streaming %d token", p, peerver, ver, len(tokens))
+			time.Sleep(3 * time.Second)
+		}
+		if peerver > ver {
+			log.Printf("Was going to stream %d tokens to client %s but remote version %d > local version %d", len(tokens), p, peerver, ver)
+			return
+		}
+	}
+
+	log.Printf("Streaming %d tokens to %s (ring version %d)", len(tokens), p, ver)
+	for _, token := range tokens {
+		d.dbL.Lock()
+		for k, v := range d.db[token] {
+			if err := p.Set(k, v, 0); err != nil {
+				log.Printf("Error trying to stream key %q for token %d to client %s: %v", k, token, p, err)
+			}
+		}
+		// We've streamed this token to another client, delete it locally
+		d.db[token] = make(map[string]Value)
+		d.dbL.Unlock()
+	}
+
 }
 
 type nodeMap map[string]DB

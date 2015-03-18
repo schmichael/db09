@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-type keyHandler struct {
+type server struct {
 	db DB
 }
 
-func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 	dir, key := path.Split(r.URL.Path)
 	if dir != "/keys/" || key == "" {
 		w.WriteHeader(404)
@@ -29,20 +29,20 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	var v *Value
+	var v Value
 
 	switch r.Method {
 	case "GET":
-		v, err = h.db.Get(key, rl)
+		v, err = s.db.Get(key, rl)
 	case "PUT", "POST": //FIXME POST only supported out of laziness
-		incoming := &Value{}
-		if err = json.NewDecoder(r.Body).Decode(incoming); err != nil {
+		incoming := Value{}
+		if err = json.NewDecoder(r.Body).Decode(&incoming); err != nil {
 			break
 		}
 		if incoming.Timestamp == 0 {
 			incoming.Timestamp = uint64(time.Now().UnixNano())
 		}
-		err = h.db.Set(key, incoming, rl)
+		err = s.db.Set(key, incoming, rl)
 		log.Printf("%s %s %q (err? %v)", r.Method, r.URL, incoming.V, err)
 	default:
 		w.WriteHeader(405)
@@ -63,34 +63,30 @@ func (h *keyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(200)
-	if v == nil {
+	if v.Empty() {
 		w.Write([]byte("ok"))
 		return
 	}
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if err := json.NewEncoder(w).Encode(&v); err != nil {
 		log.Printf("Error writing response: %v", err)
 	}
 }
 
-type gossipHandler struct {
-	db DB
-}
-
-func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s server) GossipHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
-		if err := json.NewEncoder(w).Encode(h.db.Gossip()); err != nil {
+		if err := json.NewEncoder(w).Encode(s.db.Gossip()); err != nil {
 			w.WriteHeader(500)
 			log.Printf("Error writing Gossip... hopefully the client just disappeared? %v", err)
 		}
 	case "POST":
-		s := &State{}
-		if err := json.NewDecoder(r.Body).Decode(s); err != nil {
+		state := &State{}
+		if err := json.NewDecoder(r.Body).Decode(state); err != nil {
 			w.WriteHeader(500)
 			log.Printf("Error reading Gossip: %v", err)
 			return
 		}
-		h.db.GossipUpdate(s)
+		s.db.GossipUpdate(state)
 		w.WriteHeader(200)
 		w.Write([]byte("ok"))
 	default:
@@ -99,10 +95,21 @@ func (h *gossipHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s server) VersionHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(405)
+		fmt.Fprintf(w, "%s unsupported", r.Method)
+		return
+	}
+	fmt.Fprintf(w, "%d", s.db.Version())
+}
+
 // Serve db on bind. Blocks until error.
 func Serve(bind string, db DB) {
-	http.Handle("/keys/", &keyHandler{db})
-	http.Handle("/gossip", &gossipHandler{db})
+	s := server{db}
+	http.HandleFunc("/keys/", s.KeyHandler)
+	http.HandleFunc("/gossip", s.GossipHandler)
+	http.HandleFunc("/gossip/version", s.VersionHandler)
 	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("pong"))
 	})
