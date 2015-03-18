@@ -94,12 +94,12 @@ func NewMemDB(selfAddr string, rl int, seeds []*Client) *MemDB {
 candidateSearch:
 	for token := 0; token < Tokens; token++ {
 		replicants := make(map[string]struct{}, rl)
-		for i := uint16(token); i < uint16(token)+uint16(rl); i++ {
-			a := d.ring[i].Addr()
+		for i := token; i < token+rl; i++ {
+			a := d.ring[uint16(i)].Addr()
 			if _, ok := replicants[a]; ok {
 				// This replicant owns two tokens too close together, take one
 				candidates = append(candidates, uint16(token))
-				token = int(i)
+				token = i + 1
 				continue candidateSearch
 			}
 			replicants[a] = struct{}{}
@@ -480,6 +480,55 @@ func (d *MemDB) stream(p DB, tokens []int, ver uint64) {
 		d.dbL.Unlock()
 	}
 
+}
+
+type NodeStatus struct {
+	Addr   string         `json:"addr"`
+	RF     int            `json:"replication_factor"`
+	Ring   map[string]int `json:"ring"`
+	Ver    uint64         `json:"ring_version"`
+	Tokens int            `json:"num_tokens"`
+	Keys   int            `json:"num_keys"`
+	Tombs  int            `json:"num_tombstones"`
+	URT    int            `json:"num_under_replicated_tokens"`
+}
+
+func (d *MemDB) NodeStatus() *NodeStatus {
+	n := NodeStatus{
+		Addr: d.addr,
+		RF:   d.rl,
+	}
+
+	d.ringL.Lock()
+	n.Ver = d.version
+	n.Ring = make(map[string]int, len(d.peers))
+	d.ringL.Unlock()
+
+	d.dbL.Lock()
+	for token, db := range d.ring {
+		n.Ring[db.Addr()]++
+		if db.Addr() == d.addr {
+			n.Tokens++
+			for _, v := range d.db[token] {
+				n.Keys++
+				if v.Deleted {
+					n.Tombs++
+				}
+			}
+		}
+
+		// Check for under-replicated keys
+		owners := map[string]struct{}{}
+		for i := token; i < token+d.rl; i++ {
+			owners[d.ring[uint16(i)].Addr()] = struct{}{}
+		}
+		if len(owners) < d.rl {
+			n.URT++
+		}
+	}
+	d.dbL.Unlock()
+
+	return &n
 }
 
 type nodeMap map[string]DB
