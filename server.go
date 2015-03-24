@@ -24,7 +24,7 @@ func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Default to quorum
-	rl := s.db.rl>>1 + 1
+	rl := s.db.rf>>1 + 1
 	if r, err := strconv.Atoi(r.URL.Query().Get("rl")); err == nil {
 		rl = r
 	}
