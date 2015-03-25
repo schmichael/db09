@@ -130,15 +130,17 @@ func (s server) NodeStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 // Serve db on bind. Blocks until error.
 func Serve(bind string, db *MemDB) {
+	mux := http.NewServeMux()
 	s := server{db}
-	http.HandleFunc("/keys/", s.KeyHandler)
-	http.HandleFunc("/gossip", s.GossipHandler)
-	http.HandleFunc("/gossip/version", s.VersionHandler)
-	http.HandleFunc("/status/node", s.NodeStatusHandler)
-	http.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/keys/", s.KeyHandler)
+	mux.HandleFunc("/gossip", s.GossipHandler)
+	mux.HandleFunc("/gossip/version", s.VersionHandler)
+	mux.HandleFunc("/status/node", s.NodeStatusHandler)
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("pong"))
 	})
-	if err := http.ListenAndServe(bind, nil); err != nil {
+	hs := &http.Server{Addr: bind, Handler: mux}
+	if err := hs.ListenAndServe(); err != nil {
 		log.Printf("http server exited with: %v", err)
 	}
 }
