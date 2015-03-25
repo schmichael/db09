@@ -30,7 +30,7 @@ func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var err error
-	var v Value
+	var v *Value
 
 	switch r.Method {
 	case "GET":
@@ -43,7 +43,7 @@ func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 		if incoming.Timestamp == 0 {
 			incoming.Timestamp = uint64(time.Now().UnixNano())
 		}
-		err = s.db.Set(key, incoming, rl)
+		err = s.db.Set(key, &incoming, rl)
 		log.Printf("%s %s %q (err? %v)", r.Method, r.URL, incoming.V, err)
 	case "DELETE":
 		v := Value{Deleted: true}
@@ -52,7 +52,7 @@ func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			v.Timestamp = uint64(time.Now().UnixNano())
 		}
-		err = s.db.Set(key, v, rl)
+		err = s.db.Set(key, &v, rl)
 		log.Printf("%s %s %d (err? %v)", r.Method, r.URL, v.Timestamp, err)
 	default:
 		w.WriteHeader(405)
@@ -73,7 +73,7 @@ func (s server) KeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(200)
-	if v.Empty() {
+	if v == nil {
 		w.Write([]byte("ok"))
 		return
 	}

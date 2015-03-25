@@ -24,8 +24,8 @@ type State struct {
 
 type DB interface {
 	Addr() string
-	Get(key string, replicas int) (Value, error)
-	Set(key string, v Value, replicas int) error
+	Get(key string, replicas int) (*Value, error)
+	Set(key string, v *Value, replicas int) error
 
 	GossipUpdate(*State) error
 	Gossip() *State
@@ -43,7 +43,7 @@ type MemDB struct {
 	peers   map[string]*Client
 
 	dbL sync.Mutex
-	db  []map[string]Value // token -> key -> value
+	db  []map[string]*Value // token -> key -> value
 }
 
 func NewMemDB(selfAddr string, partitions, rf int, seeds []*Client) *MemDB {
@@ -52,13 +52,13 @@ func NewMemDB(selfAddr string, partitions, rf int, seeds []*Client) *MemDB {
 		parts: partitions,
 		rf:    rf,
 		peers: make(map[string]*Client, len(seeds)),
-		db:    make([]map[string]Value, partitions),
+		db:    make([]map[string]*Value, partitions),
 		ring:  make([]DB, partitions),
 	}
 
 	// Initialize in memory db
 	for i := range d.db {
-		d.db[i] = make(map[string]Value)
+		d.db[i] = make(map[string]*Value)
 	}
 
 	// Gossip to get initial state
@@ -203,12 +203,12 @@ func (d *MemDB) replicas(token int) []DB {
 	return r
 }
 
-func (d *MemDB) Get(key string, replicas int) (Value, error) {
+func (d *MemDB) Get(key string, replicas int) (*Value, error) {
 	if replicas > d.rf {
-		return EmptyValue, TooManyReplicas
+		return nil, TooManyReplicas
 	}
 	if len(key) == 0 {
-		return EmptyValue, EmptyKey
+		return nil, EmptyKey
 	}
 
 	// Only forward Get if needed
@@ -242,7 +242,7 @@ func (d *MemDB) Get(key string, replicas int) (Value, error) {
 
 	// Get timestamp counts
 	tsCounts := map[uint64]int{}
-	candidates := make(map[uint64]Value, len(results))
+	candidates := make(map[uint64]*Value, len(results))
 	for _, result := range results {
 		tsCounts[result.Timestamp]++
 
@@ -270,7 +270,7 @@ func (d *MemDB) Get(key string, replicas int) (Value, error) {
 	if winner == 0 {
 		log.Printf("Out of %d results for %q, no single version occurred at least %d times.",
 			len(results), key, replicas)
-		return EmptyValue, NotFound
+		return nil, NotFound
 	}
 
 	value := candidates[winner]
@@ -292,7 +292,7 @@ func (d *MemDB) Get(key string, replicas int) (Value, error) {
 	return value, nil
 }
 
-func (d *MemDB) localGet(key string) (Value, error) {
+func (d *MemDB) localGet(key string) (*Value, error) {
 	token := d.tokenize(key)
 
 	// Sanity check
@@ -306,17 +306,13 @@ func (d *MemDB) localGet(key string) (Value, error) {
 	// Always try to retrieve a key locally even if this node isn't a replica. It
 	// may have been in the past and a stale version is better than no version?
 	d.dbL.Lock()
-	v, ok := d.db[token][string(key)]
+	v := d.db[token][string(key)]
 	d.dbL.Unlock()
-
-	if !ok {
-		return EmptyValue, NotFound
-	}
 	return v, nil
 }
 
 // Set key to value.
-func (d *MemDB) Set(key string, v Value, replicas int) error {
+func (d *MemDB) Set(key string, v *Value, replicas int) error {
 	if replicas > d.rf {
 		return TooManyReplicas
 	}
@@ -353,7 +349,7 @@ func (d *MemDB) Set(key string, v Value, replicas int) error {
 	return lastErr
 }
 
-func (d *MemDB) localSet(key string, v Value) error {
+func (d *MemDB) localSet(key string, v *Value) error {
 	token := d.tokenize(key)
 	if !d.has(token) {
 		log.Printf("Aborting SET for %q because local node is not a replica.", key)
@@ -502,7 +498,7 @@ func (d *MemDB) stream(p *Client, tokens []int, ver uint64) {
 			}
 		}
 		// We've streamed this token to another client, delete it locally
-		d.db[token] = make(map[string]Value)
+		d.db[token] = make(map[string]*Value)
 		d.dbL.Unlock()
 	}
 

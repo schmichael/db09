@@ -85,10 +85,10 @@ func (c *Client) Gossip() *State {
 	}
 }
 
-func (c *Client) Get(key string, replicas int) (Value, error) {
+func (c *Client) Get(key string, replicas int) (*Value, error) {
 	resp, err := http.Get(c.keypath(key, replicas))
 	if err != nil {
-		return EmptyValue, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
@@ -96,27 +96,27 @@ func (c *Client) Get(key string, replicas int) (Value, error) {
 		//TODO ReadAll is basically always a bad idea, but w/e yolo
 		buf, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return EmptyValue, err
+			return nil, err
 		}
 		if err, ok := errMap[string(buf)]; ok {
-			return EmptyValue, err
+			return nil, err
 		}
-		return EmptyValue, fmt.Errorf("unknown error: %q", buf)
+		return nil, fmt.Errorf("unknown error: %q", buf)
 	case 404:
-		return EmptyValue, NotFound
+		return nil, NotFound
 	case 200:
-		v := Value{}
-		if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
-			return EmptyValue, err
+		v := &Value{}
+		if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
+			return nil, err
 		}
 		return v, nil
 	default:
-		return EmptyValue, fmt.Errorf("unknown status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("unknown status: %d", resp.StatusCode)
 	}
 }
 
-func (c *Client) Set(key string, v Value, replicas int) error {
-	buf, err := json.Marshal(&v)
+func (c *Client) Set(key string, v *Value, replicas int) error {
+	buf, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
